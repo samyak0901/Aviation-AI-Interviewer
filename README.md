@@ -1,4 +1,5 @@
 Aviation AI Behavior Analyzer (CV Model)
+
 Project Overview
 This repository contains a Computer Vision (CV) algorithm designed to automate the evaluation of cabin crew candidates. Based on the IndiGo Cabin Crew recruitment standards, this model analyzes video feeds to detect high-priority behavioral traits and grooming standards
 
@@ -21,12 +22,12 @@ NumPy (Mathematical alignment calculations)
 
 Project Structure
 Plaintext
-├── main.py              # Main execution script for real-time analysis
-├── utils/
-│   ├── posture.py       # Logic for calculating shoulder/hip angles
-│   └── expressions.py   # Logic for mouth/eye landmark distances
-├── requirements.txt     # List of dependencies
-└── README.md            # Project documentation
+main.py              # Main execution script for real-time analysis
+utils/
+posture.py       # Logic for calculating shoulder/hip angles
+expressions.py   # Logic for mouth/eye landmark distances
+requirements.txt     # List of dependencies
+README.md            # Project documentation
 
 Roadmap
 1)[x] Initial CV Pipeline setup (MediaPipe)
