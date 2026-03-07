@@ -4,75 +4,95 @@ import sounddevice as sd
 import numpy as np
 import threading
 
-# --- INITIALIZATION ---
+# --- 1. INITIALIZATION ---
 mp_holistic = mp.solutions.holistic
 holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 mp_drawing = mp.solutions.drawing_utils
 
-# --- AUDIO DETECTION THREAD ---
-# Target: Fixes "No audio detected" issue mentioned in report 
-audio_detected = False
-def check_audio():
-    global audio_detected
-    def audio_callback(indata, frames, time, status):
-        global audio_detected
-        volume_norm = np.linalg.norm(indata) * 10
-        audio_detected = volume_norm > 0.5 # Threshold for sound
+# --- 2. AUDIO DETECTION ENGINE ---
+# Resolves the "Audio Not Detected" failure in your report
+audio_level = 0
+def audio_callback(indata, frames, time, status):
+    global audio_level
+    audio_level = np.linalg.norm(indata) * 10
+
+def start_audio():
     with sd.InputStream(callback=audio_callback):
         while True: sd.sleep(1000)
 
-threading.Thread(target=check_audio, daemon=True).start()
+threading.Thread(target=start_audio, daemon=True).start()
 
-# --- CONFIGURATION (Based on Aviation Review Doc ) ---
-# Posture: Measures vertical alignment of nose and shoulders to avoid tilted errors
-POSTURE_THRESHOLD = 0.12  
-SMILE_THRESHOLD = 0.04    # Measures lip corners for "Genuine Smile" 
+# --- 3. CONFIGURATION ---
+POSTURE_MIN_GAP = 0.12  # Threshold for Hunching (Nose vs. Shoulder)
+TILT_MAX_DIFF = 0.04    # Threshold for Leaning (Shoulder vs. Shoulder)
+SMILE_MIN_LIFT = 0.03   # Threshold for Smiling (Lip corners)
 
 cap = cv2.VideoCapture(0)
+
+print("Aviation AI System Active. Press 'q' to stop.")
 
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret: break
 
+    # Prep Image
     frame = cv2.flip(frame, 1)
     results = holistic.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-    # 1. RECTIFIED POSTURE (Seated & Tilted Detection)
-    # Target: Detects 'Soldier Posture' vs 'Visible Slouching' (Severity 9) 
-    posture_msg, p_color = "Posture: Professional", (0, 255, 0)
+    # --- STATUS VARIABLES ---
+    posture_msg, p_color = "POSTURE: Analyzing...", (255, 255, 255)
+    face_msg, f_color = "FACE: Analyzing...", (255, 255, 255)
+    audio_msg, a_color = "AUDIO: No Sound", (0, 0, 255)
+
+    # 1. POSTURE LOGIC (Rectified for Sitting/Standing/Tilting)
     if results.pose_landmarks:
         lm = results.pose_landmarks.landmark
-        # Use nose-to-shoulder-line vertical offset to handle sitting 
-        shoulder_y = (lm[11].y + lm[12].y) / 2
-        # Detect tilting: if shoulders are significantly unaligned
-        tilt = abs(lm[11].y - lm[12].y)
         
-        if (shoulder_y - lm[0].y) < POSTURE_THRESHOLD or tilt > 0.05:
-            posture_msg, p_color = "REJECT: Slouching/Tilted Posture", (0, 0, 255)
+        # Hunch Detection (Vertical Gap)
+        shoulder_center_y = (lm[11].y + lm[12].y) / 2
+        nose_y = lm[0].y
+        gap = shoulder_center_y - nose_y
+        
+        # Tilt Detection (Shoulder Symmetry)
+        shoulder_diff = abs(lm[11].y - lm[12].y)
 
-    # 2. RECTIFIED FACIAL EXPRESSION
-    # Target: Genuine Sustained Smile (Severity 10) vs Frown (Severity 10) 
-    face_msg, f_color = "Expression: Neutral", (255, 255, 255)
+        if gap < POSTURE_MIN_GAP:
+            posture_msg, p_color = "REJECT: Slouching/Hunching Detected", (0, 0, 255)
+        elif shoulder_diff > TILT_MAX_DIFF:
+            posture_msg, p_color = "REJECT: Tilted/Bended Posture", (0, 0, 255)
+        else:
+            posture_msg, p_color = "POSTURE: Professional (Straight)", (0, 255, 0)
+
+    # 2. FACE LOGIC (Smile Detection)
     if results.face_landmarks:
         f = results.face_landmarks.landmark
-        smile_gap = (f[0].y + f[17].y)/2 - min(f[61].y, f[291].y)
-        if smile_gap > SMILE_THRESHOLD:
-            face_msg, f_color = "Accepted: Genuine Smile", (0, 255, 0)
-        elif smile_gap < 0.01:
-            face_msg, f_color = "REJECT: Frown Detected", (0, 0, 255)
+        # Calculate if corners of mouth are higher than center (Smile)
+        mouth_center_y = (f[13].y + f[14].y) / 2
+        smile_lift = mouth_center_y - min(f[61].y, f[291].y)
 
-    # 3. AUDIO & GROOMING STATUS
-    audio_msg = "Audio: DETECTED" if audio_detected else "REJECT: No Audio Detected"
-    a_color = (0, 255, 0) if audio_detected else (0, 0, 255)
+        if smile_lift > SMILE_MIN_LIFT:
+            face_msg, f_color = "FACE: Genuine Smile Accepted", (0, 255, 0)
+        else:
+            face_msg, f_color = "REJECT: Frown/Neutral (Smile Required)", (0, 0, 255)
 
-    # UI OVERLAY (Mapped to Report Requirements )
-    cv2.putText(frame, posture_msg, (10, 30), 1, 1.5, p_color, 2)
-    cv2.putText(frame, face_msg, (10, 70), 1, 1.5, f_color, 2)
-    cv2.putText(frame, audio_msg, (10, 110), 1, 1.5, a_color, 2)
-    cv2.putText(frame, "Grooming: Hair/Attire Check Active", (10, 150), 1, 1, (255, 255, 0), 1)
+    # 3. AUDIO LOGIC
+    if audio_level > 0.4:
+        audio_msg, a_color = "AUDIO: Sound Detected", (0, 255, 0)
 
-    cv2.imshow('Aviation AI Behavior Analyzer', frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'): break
+    # --- UI DISPLAY ---
+    # Background rectangle for readability
+    cv2.rectangle(frame, (0,0), (600, 160), (0,0,0), -1)
+    cv2.putText(frame, posture_msg, (10, 40), 1, 1.5, p_color, 2)
+    cv2.putText(frame, face_msg, (10, 85), 1, 1.5, f_color, 2)
+    cv2.putText(frame, audio_msg, (10, 130), 1, 1.5, a_color, 2)
+
+    # Visualization
+    mp_drawing.draw_landmarks(frame, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS)
+    
+    cv2.imshow('Final Aviation AI Behavior Analyzer', frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
 cap.release()
 cv2.destroyAllWindows()
